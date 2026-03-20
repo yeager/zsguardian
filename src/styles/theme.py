@@ -70,7 +70,7 @@ def get_stylesheet(theme: dict) -> str:
     }}
     QWidget {{
         color: {t['text_primary']};
-        font-family: "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+        font-family: ".AppleSystemUIFont", "Helvetica Neue", Arial, sans-serif;
     }}
 
     /* Glass card */
@@ -298,7 +298,7 @@ def get_stylesheet(theme: dict) -> str:
         border-radius: 10px;
         padding: 10px;
         color: {t['text_primary']};
-        font-family: "SF Mono", "Menlo", "Monaco", monospace;
+        font-family: "Menlo", "Monaco", monospace;
         font-size: 12px;
     }}
     """

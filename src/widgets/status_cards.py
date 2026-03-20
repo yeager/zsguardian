@@ -38,12 +38,13 @@ class StatusCard(QFrame):
         top = QHBoxLayout()
         if icon:
             icon_lbl = QLabel(icon)
-            icon_lbl.setFont(QFont("SF Pro Display", 16))
+            icon_lbl.setFont(QFont(".AppleSystemUIFont", 16))
             top.addWidget(icon_lbl)
         title_lbl = QLabel(title)
         title_lbl.setObjectName("subtitle")
-        title_lbl.setFont(QFont("SF Pro Display", 12, QFont.Weight.Medium))
-        top.addWidget(title_lbl)
+        title_lbl.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Medium))
+        title_lbl.setWordWrap(True)
+        top.addWidget(title_lbl, 1)
         top.addStretch()
         layout.addLayout(top)
 
@@ -56,7 +57,7 @@ class StatusCard(QFrame):
         # Subtitle / detail line
         self._detail_label = QLabel("")
         self._detail_label.setObjectName("subtitle")
-        self._detail_label.setFont(QFont("SF Pro Display", 11))
+        self._detail_label.setFont(QFont(".AppleSystemUIFont", 11))
         layout.addWidget(self._detail_label)
 
         # Fade-in animation

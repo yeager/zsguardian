@@ -137,14 +137,14 @@ class SecurityScoreGauge(QWidget):
 
         # Center text — score
         painter.setPen(QColor("#E6EDF3"))
-        font = QFont("SF Pro Display", int(side * 0.18), QFont.Weight.Bold)
+        font = QFont(".AppleSystemUIFont", int(side * 0.18), QFont.Weight.Bold)
         painter.setFont(font)
         painter.drawText(QRectF(0, cy - side * 0.18, w, side * 0.28),
                          Qt.AlignmentFlag.AlignCenter,
                          f"{int(self._display_score)}")
 
         # Grade label
-        grade_font = QFont("SF Pro Display", int(side * 0.07), QFont.Weight.DemiBold)
+        grade_font = QFont(".AppleSystemUIFont", int(side * 0.07), QFont.Weight.DemiBold)
         painter.setFont(grade_font)
         painter.setPen(self._score_color())
         painter.drawText(QRectF(0, cy + side * 0.06, w, side * 0.14),
@@ -152,7 +152,7 @@ class SecurityScoreGauge(QWidget):
                          self._grade())
 
         # Label below
-        label_font = QFont("SF Pro Display", int(side * 0.045))
+        label_font = QFont(".AppleSystemUIFont", int(side * 0.045))
         painter.setFont(label_font)
         painter.setPen(QColor("#8B949E"))
         painter.drawText(QRectF(0, cy + side * 0.17, w, side * 0.1),

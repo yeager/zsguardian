@@ -54,6 +54,7 @@ class ZscalerMCPClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                limit=1024 * 1024,  # 1MB buffer — tools/list response is ~170KB
             )
         except FileNotFoundError:
             logger.error("uvx not found — install uv first: https://docs.astral.sh/uv/")
@@ -144,7 +145,7 @@ class ZscalerMCPClient:
 
         try:
             await self._write_message(message)
-            return await asyncio.wait_for(future, timeout=30)
+            return await asyncio.wait_for(future, timeout=60)
         except asyncio.TimeoutError:
             logger.warning("Request %s (id=%d) timed out", method, req_id)
             self._pending.pop(req_id, None)

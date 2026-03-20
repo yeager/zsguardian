@@ -4,8 +4,8 @@ import asyncio
 import logging
 from functools import partial
 
-from PySide6.QtCore import Qt, QTimer, Signal, QSize
-from PySide6.QtGui import QFont, QColor, QIcon
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -40,6 +40,7 @@ from styles.theme import DARK_THEME, LIGHT_THEME, get_stylesheet
 from widgets.score_gauge import SecurityScoreGauge
 from widgets.status_cards import StatusCard, StatusCardRow
 from widgets.policy_map import PolicyMapWidget, PolicyNode
+from widgets.findings import FindingsPanel, Finding
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class SettingsDialog(QDialog):
         # Credential fields
         for field_key in KEYCHAIN_KEYS:
             label = QLabel(LABELS[field_key])
-            label.setFont(QFont("SF Pro Display", 12, QFont.Weight.Medium))
+            label.setFont(QFont(".AppleSystemUIFont", 12, QFont.Weight.Medium))
             layout.addWidget(label)
 
             line = QLineEdit()
@@ -150,13 +151,16 @@ class DashboardWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("ZscalerGuardian")
         self.setMinimumSize(1100, 720)
-        self.resize(1280, 820)
+        self.resize(1360, 880)
 
         self._dark_mode = True
         self._theme = DARK_THEME
         self._credentials = load_credentials()
         self._mcp: ZscalerMCPClient | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+
+        # Store raw data for cross-referencing
+        self._raw_data: dict = {}
 
         self._build_ui()
         self._apply_theme()
@@ -183,11 +187,11 @@ class DashboardWindow(QMainWindow):
 
         # Logo area
         logo = QLabel("ZscalerGuardian")
-        logo.setFont(QFont("SF Pro Display", 16, QFont.Weight.Bold))
+        logo.setFont(QFont(".AppleSystemUIFont", 16, QFont.Weight.Bold))
         logo.setStyleSheet("color: #00D4AA; padding: 8px;")
         sidebar_layout.addWidget(logo)
 
-        version = QLabel("v1.0.0 — Zero Trust Dashboard")
+        version = QLabel("v2.0.0 — Zero Trust Dashboard")
         version.setObjectName("subtitle")
         version.setStyleSheet("padding-left: 8px; font-size: 10px;")
         sidebar_layout.addWidget(version)
@@ -198,11 +202,13 @@ class DashboardWindow(QMainWindow):
         self._nav_buttons: list[QPushButton] = []
         pages = [
             ("Overview", 0),
-            ("Policies", 1),
-            ("Connectors", 2),
-            ("Application Segments", 3),
-            ("MCP Tools", 4),
-            ("Event Log", 5),
+            ("Threats & Insights", 1),
+            ("Policies", 2),
+            ("Findings & Anomalies", 3),
+            ("Connectors", 4),
+            ("Application Segments", 5),
+            ("MCP Tools", 6),
+            ("Event Log", 7),
         ]
 
         self._stack = QStackedWidget()
@@ -220,7 +226,7 @@ class DashboardWindow(QMainWindow):
         # Connection status
         self._conn_indicator = QLabel("  Disconnected")
         self._conn_indicator.setObjectName("statusBad")
-        self._conn_indicator.setFont(QFont("SF Pro Display", 11))
+        self._conn_indicator.setFont(QFont(".AppleSystemUIFont", 11))
         sidebar_layout.addWidget(self._conn_indicator)
 
         # Bottom buttons
@@ -241,12 +247,14 @@ class DashboardWindow(QMainWindow):
         root.addWidget(sidebar)
 
         # Pages
-        self._stack.addWidget(self._build_overview_page())
-        self._stack.addWidget(self._build_policies_page())
-        self._stack.addWidget(self._build_connectors_page())
-        self._stack.addWidget(self._build_app_segments_page())
-        self._stack.addWidget(self._build_tools_page())
-        self._stack.addWidget(self._build_log_page())
+        self._stack.addWidget(self._build_overview_page())        # 0
+        self._stack.addWidget(self._build_threats_page())          # 1
+        self._stack.addWidget(self._build_policies_page())         # 2
+        self._stack.addWidget(self._build_findings_page())         # 3
+        self._stack.addWidget(self._build_connectors_page())       # 4
+        self._stack.addWidget(self._build_app_segments_page())     # 5
+        self._stack.addWidget(self._build_tools_page())            # 6
+        self._stack.addWidget(self._build_log_page())              # 7
 
         root.addWidget(self._stack, 1)
         self._navigate(0)
@@ -272,10 +280,21 @@ class DashboardWindow(QMainWindow):
         # Top row: gauge + cards
         top = QHBoxLayout()
 
+        gauge_col = QVBoxLayout()
         self._gauge = SecurityScoreGauge()
         self._gauge.setFixedSize(240, 240)
         self._gauge.set_score(0)
-        top.addWidget(self._gauge, 0, Qt.AlignmentFlag.AlignCenter)
+        gauge_col.addWidget(self._gauge, 0, Qt.AlignmentFlag.AlignCenter)
+
+        # Score breakdown panel
+        self._score_breakdown = QLabel("")
+        self._score_breakdown.setObjectName("subtitle")
+        self._score_breakdown.setWordWrap(True)
+        self._score_breakdown.setFont(QFont(".AppleSystemUIFont", 10))
+        self._score_breakdown.setFixedWidth(240)
+        gauge_col.addWidget(self._score_breakdown)
+
+        top.addLayout(gauge_col)
 
         cards_col = QVBoxLayout()
         self._overview_cards = StatusCardRow()
@@ -287,10 +306,10 @@ class DashboardWindow(QMainWindow):
 
         # Second row of cards
         self._overview_cards2 = StatusCardRow()
-        self._overview_cards2.add_card("users", "ZPA Users", icon="👤", accent="#BB86FC")
-        self._overview_cards2.add_card("dlp", "DLP Engines", icon="🔍", accent="#FF6B6B")
-        self._overview_cards2.add_card("url", "URL Categories", icon="🌐", accent="#64B5F6")
-        self._overview_cards2.add_card("idp", "Identity Providers", icon="🔐", accent="#FFD54F")
+        self._overview_cards2.add_card("firewall", "Firewall Rules", icon="🔥", accent="#FF6B6B")
+        self._overview_cards2.add_card("dlp", "DLP Rules", icon="🔍", accent="#BB86FC")
+        self._overview_cards2.add_card("ssl", "SSL Inspection", icon="🔐", accent="#64B5F6")
+        self._overview_cards2.add_card("url", "URL Filtering", icon="🌐", accent="#FFD54F")
         cards_col.addWidget(self._overview_cards2)
 
         top.addLayout(cards_col, 1)
@@ -305,7 +324,49 @@ class DashboardWindow(QMainWindow):
         self._load_progress.setTextVisible(False)
         layout.addWidget(self._load_progress)
 
+        # Recommendations
+        self._recommendations_label = QLabel("")
+        self._recommendations_label.setWordWrap(True)
+        self._recommendations_label.setFont(QFont(".AppleSystemUIFont", 11))
+        layout.addWidget(self._recommendations_label)
+
         layout.addStretch()
+        return page
+
+    def _build_threats_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
+
+        header = QLabel("Threats & Insights")
+        header.setObjectName("sectionTitle")
+        layout.addWidget(header)
+
+        # Threat summary cards
+        self._threat_cards = StatusCardRow()
+        self._threat_cards.add_card("incidents", "Cyber Incidents", icon="🚨", accent="#FF6B6B")
+        self._threat_cards.add_card("threats", "Threat Categories", icon="☠️", accent="#FFB347")
+        self._threat_cards.add_card("shadow_it", "Shadow IT Apps", icon="👻", accent="#BB86FC")
+        self._threat_cards.add_card("atp", "Malicious URLs", icon="🔗", accent="#FF4444")
+        layout.addWidget(self._threat_cards)
+
+        # Scrollable detail area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        self._threats_container = QWidget()
+        self._threats_layout = QVBoxLayout(self._threats_container)
+        self._threats_layout.setSpacing(8)
+        self._threats_layout.setContentsMargins(0, 0, 0, 0)
+        scroll.setWidget(self._threats_container)
+        layout.addWidget(scroll, 1)
+
+        self._threats_placeholder = QLabel("Connect to load threat intelligence data from ZInsights.")
+        self._threats_placeholder.setObjectName("subtitle")
+        self._threats_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._threats_layout.addWidget(self._threats_placeholder)
+        self._threats_layout.addStretch()
+
         return page
 
     def _build_policies_page(self) -> QWidget:
@@ -320,6 +381,16 @@ class DashboardWindow(QMainWindow):
 
         self._policy_map = PolicyMapWidget()
         layout.addWidget(self._policy_map, 1)
+        return page
+
+    def _build_findings_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
+
+        self._findings_panel = FindingsPanel()
+        layout.addWidget(self._findings_panel, 1)
         return page
 
     def _build_connectors_page(self) -> QWidget:
@@ -417,7 +488,7 @@ class DashboardWindow(QMainWindow):
 
         self._log_view = QTextEdit()
         self._log_view.setReadOnly(True)
-        self._log_view.setFont(QFont("SF Mono", 11))
+        self._log_view.setFont(QFont("Menlo", 11))
         layout.addWidget(self._log_view, 1)
 
         clear_btn = QPushButton("Clear Log")
@@ -512,137 +583,833 @@ class DashboardWindow(QMainWindow):
         card = self._overview_cards.card("tools")
         if card:
             card.set_value(str(len(tools)))
-            # Categorize tools
             zpa = sum(1 for t in tools if "zpa" in t.name.lower())
             zia = sum(1 for t in tools if "zia" in t.name.lower())
             zdx = sum(1 for t in tools if "zdx" in t.name.lower())
             card.set_detail(f"ZPA: {zpa}  ZIA: {zia}  ZDX: {zdx}")
 
-        self._load_progress.setValue(15)
+        self._load_progress.setValue(10)
 
-        # Fetch data from various tools
-        score = 50  # Base score
+        # ── Phase 1: Core policy/config data (parallel) ──
+        self._log("Fetching core policy and configuration data...")
+        results = await asyncio.gather(
+            self._safe_call("zpa_list_access_policy_rules"),
+            self._safe_call("zpa_list_forwarding_policy_rules"),
+            self._safe_call("zpa_list_app_connector_groups"),
+            self._safe_call("zpa_list_application_segments"),
+            self._safe_call("zpa_list_segment_groups"),
+            self._safe_call("zpa_list_server_groups"),
+            self._safe_call("zia_list_cloud_firewall_rules"),
+            self._safe_call("zia_list_web_dlp_rules"),
+            self._safe_call("zia_list_ssl_inspection_rules"),
+            self._safe_call("zia_list_url_filtering_rules"),
+            return_exceptions=True,
+        )
 
-        # Try fetching policies
-        policies_data = await self._safe_call("list_access_policies")
-        policy_count = 0
-        policy_nodes = []
-        if isinstance(policies_data, list):
-            policy_count = len(policies_data)
-            for p in policies_data[:20]:
-                name = p.get("name", "Unknown") if isinstance(p, dict) else str(p)
-                policy_nodes.append(PolicyNode(
-                    name=name,
-                    category="Access Policies",
-                    status="active",
-                    count=1,
-                ))
-            score += min(15, policy_count)
-        elif isinstance(policies_data, dict) and "list" in str(policies_data):
-            # handle wrapped responses
-            items = policies_data.get("list", policies_data.get("items", []))
-            if isinstance(items, list):
-                policy_count = len(items)
+        (access_policies, forwarding_rules, connector_groups, segments,
+         segment_groups, server_groups, firewall_rules, dlp_rules,
+         ssl_rules, url_rules) = [
+            r if not isinstance(r, Exception) else None for r in results
+        ]
 
-        self._load_progress.setValue(30)
+        self._load_progress.setValue(40)
 
-        card = self._overview_cards.card("policies")
-        if card:
-            card.set_value(str(policy_count))
+        # Store raw data for anomaly detection
+        self._raw_data = {
+            "access_policies": access_policies,
+            "forwarding_rules": forwarding_rules,
+            "connector_groups": connector_groups,
+            "segments": segments,
+            "segment_groups": segment_groups,
+            "server_groups": server_groups,
+            "firewall_rules": firewall_rules,
+            "dlp_rules": dlp_rules,
+            "ssl_rules": ssl_rules,
+            "url_rules": url_rules,
+        }
 
-        # Connectors
-        connectors_data = await self._safe_call("list_connectors")
-        connector_count = 0
-        if isinstance(connectors_data, list):
-            connector_count = len(connectors_data)
-            self._populate_connectors(connectors_data)
-            healthy = sum(1 for c in connectors_data
-                          if isinstance(c, dict) and c.get("enabled", True))
-            score += min(10, healthy * 2)
-        card = self._overview_cards.card("connectors")
-        if card:
-            card.set_value(str(connector_count))
+        # ── Phase 2: Threat intelligence (parallel) ──
+        self._log("Fetching threat intelligence from ZInsights...")
+        threat_results = await asyncio.gather(
+            self._safe_call("zinsights_get_cyber_incidents"),
+            self._safe_call("zinsights_get_threat_class"),
+            self._safe_call("zinsights_get_shadow_it_apps"),
+            self._safe_call("zia_list_atp_malicious_urls"),
+            self._safe_call("zeasm_list_findings"),
+            self._safe_call("zeasm_list_lookalike_domains"),
+            self._safe_call("zia_list_auth_exempt_urls"),
+            return_exceptions=True,
+        )
 
-        self._load_progress.setValue(45)
+        (incidents, threat_classes, shadow_it, atp_urls,
+         zeasm_findings, lookalike_domains, auth_exempt) = [
+            r if not isinstance(r, Exception) else None for r in threat_results
+        ]
 
-        # App segments
-        segments_data = await self._safe_call("list_application_segments")
-        segment_count = 0
-        if isinstance(segments_data, list):
-            segment_count = len(segments_data)
-            self._populate_segments(segments_data)
-            score += min(10, segment_count)
-            for s in segments_data[:10]:
-                name = s.get("name", "Unknown") if isinstance(s, dict) else str(s)
-                policy_nodes.append(PolicyNode(
-                    name=name,
-                    category="Application Segments",
-                    status="active",
-                ))
-        card = self._overview_cards.card("segments")
-        if card:
-            card.set_value(str(segment_count))
+        self._raw_data.update({
+            "incidents": incidents,
+            "threat_classes": threat_classes,
+            "shadow_it": shadow_it,
+            "atp_urls": atp_urls,
+            "zeasm_findings": zeasm_findings,
+            "lookalike_domains": lookalike_domains,
+            "auth_exempt": auth_exempt,
+        })
 
-        self._load_progress.setValue(60)
+        self._load_progress.setValue(70)
 
-        # DLP engines
-        dlp_data = await self._safe_call("list_dlp_engines")
-        dlp_count = 0
-        if isinstance(dlp_data, list):
-            dlp_count = len(dlp_data)
-            score += min(10, dlp_count * 2)
-        card = self._overview_cards2.card("dlp")
-        if card:
-            card.set_value(str(dlp_count))
-
-        # URL categories
-        url_data = await self._safe_call("list_url_categories")
-        url_count = 0
-        if isinstance(url_data, list):
-            url_count = len(url_data)
-            score += min(5, url_count // 5)
-            for u in url_data[:5]:
-                name = u.get("configuredName", u.get("name", "Category")) if isinstance(u, dict) else str(u)
-                policy_nodes.append(PolicyNode(name=name, category="URL Categories", status="active"))
-        card = self._overview_cards2.card("url")
-        if card:
-            card.set_value(str(url_count))
-
-        self._load_progress.setValue(75)
-
-        # IdP
-        idp_data = await self._safe_call("list_idps")
-        idp_count = 0
-        if isinstance(idp_data, list):
-            idp_count = len(idp_data)
-            score += min(5, idp_count * 5)
-        card = self._overview_cards2.card("idp")
-        if card:
-            card.set_value(str(idp_count))
-
-        # Server groups (as proxy for ZPA users)
-        sg_data = await self._safe_call("list_server_groups")
-        sg_count = 0
-        if isinstance(sg_data, list):
-            sg_count = len(sg_data)
-        card = self._overview_cards2.card("users")
-        if card:
-            card.set_value(str(sg_count))
-            card.set_detail("Server Groups")
-
-        self._load_progress.setValue(90)
-
-        # Update policy map
-        self._policy_map.set_policies(policy_nodes)
-
-        # Finalize score
-        score = min(100, max(0, score))
-        self._gauge.set_score(score)
+        # ── Update UI ──
+        self._update_overview_cards()
+        self._update_policy_flow()
+        self._populate_connectors_from_groups()
+        self._populate_segments_list()
+        self._update_threats_page()
+        self._detect_anomalies()
+        self._compute_smart_score()
 
         self._load_progress.setValue(100)
         QTimer.singleShot(800, lambda: self._load_progress.setVisible(False))
+        self._log("Data refresh complete.")
 
-        self._log(f"Data refresh complete. Score: {score}/100")
+    # ── Update helpers ──
+
+    def _safe_list(self, data) -> list:
+        """Extract a list from various API response formats."""
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in ("list", "items", "rules", "findings", "apps", "domains",
+                        "urls", "connectors", "groups", "segments", "policies"):
+                if key in data and isinstance(data[key], list):
+                    return data[key]
+            # Some endpoints wrap in totalPages/list
+            if "totalPages" in data and "list" in data:
+                return data["list"] if isinstance(data["list"], list) else []
+        return []
+
+    def _update_overview_cards(self):
+        d = self._raw_data
+
+        # Policies
+        policies = self._safe_list(d.get("access_policies"))
+        card = self._overview_cards.card("policies")
+        if card:
+            card.set_value(str(len(policies)))
+            active = sum(1 for p in policies if isinstance(p, dict) and
+                         p.get("action", "").upper() == "ALLOW")
+            card.set_detail(f"{active} allow, {len(policies) - active} other")
+
+        # Connectors
+        groups = self._safe_list(d.get("connector_groups"))
+        total_connectors = 0
+        for g in groups:
+            if isinstance(g, dict):
+                conns = g.get("connectors", [])
+                if isinstance(conns, list):
+                    total_connectors += len(conns)
+        card = self._overview_cards.card("connectors")
+        if card:
+            card.set_value(str(total_connectors))
+            card.set_detail(f"in {len(groups)} groups")
+
+        # Segments
+        segs = self._safe_list(d.get("segments"))
+        card = self._overview_cards.card("segments")
+        if card:
+            card.set_value(str(len(segs)))
+            enabled = sum(1 for s in segs if isinstance(s, dict) and s.get("enabled"))
+            card.set_detail(f"{enabled} enabled")
+
+        # Firewall
+        fw = self._safe_list(d.get("firewall_rules"))
+        card = self._overview_cards2.card("firewall")
+        if card:
+            card.set_value(str(len(fw)))
+            active = sum(1 for r in fw if isinstance(r, dict) and r.get("state") == "ENABLED")
+            card.set_detail(f"{active} active")
+
+        # DLP
+        dlp = self._safe_list(d.get("dlp_rules"))
+        card = self._overview_cards2.card("dlp")
+        if card:
+            card.set_value(str(len(dlp)))
+
+        # SSL
+        ssl = self._safe_list(d.get("ssl_rules"))
+        card = self._overview_cards2.card("ssl")
+        if card:
+            card.set_value(str(len(ssl)))
+
+        # URL filtering
+        url = self._safe_list(d.get("url_rules"))
+        card = self._overview_cards2.card("url")
+        if card:
+            card.set_value(str(len(url)))
+
+    def _update_policy_flow(self):
+        """Build real policy flow: Access Policies → Segment Groups → App Segments → Server Groups → Connectors."""
+        d = self._raw_data
+        columns: dict[str, list[PolicyNode]] = {}
+        connections: list[tuple[str, str, str, str]] = []
+        anomalies: list[str] = []
+
+        # Access Policies
+        policies = self._safe_list(d.get("access_policies"))
+        policy_nodes = []
+        policy_segment_map: dict[str, list[str]] = {}
+        for p in policies:
+            if not isinstance(p, dict):
+                continue
+            name = p.get("name", "Unknown Policy")
+            action = p.get("action", "")
+            status = "active" if action.upper() == "ALLOW" else "warning" if action else "disabled"
+            policy_nodes.append(PolicyNode(name=name, category="Access Policies",
+                                           status=status, detail=action))
+            # Extract referenced app segments / segment groups
+            conditions = p.get("conditions", [])
+            if isinstance(conditions, list):
+                for cond in conditions:
+                    if isinstance(cond, dict):
+                        operands = cond.get("operands", [])
+                        if isinstance(operands, list):
+                            for op in operands:
+                                if isinstance(op, dict) and "APP_GROUP" in str(op.get("objectType", "")):
+                                    seg_name = op.get("name", "")
+                                    if seg_name:
+                                        policy_segment_map.setdefault(name, []).append(seg_name)
+        if policy_nodes:
+            columns["Access Policies"] = policy_nodes
+
+        # Segment Groups
+        seg_groups = self._safe_list(d.get("segment_groups"))
+        sg_nodes = []
+        sg_app_map: dict[str, list[str]] = {}
+        for sg in seg_groups:
+            if not isinstance(sg, dict):
+                continue
+            name = sg.get("name", "Unknown")
+            enabled = sg.get("enabled", True)
+            apps = sg.get("applications", [])
+            app_names = []
+            if isinstance(apps, list):
+                for a in apps:
+                    if isinstance(a, dict):
+                        app_names.append(a.get("name", ""))
+            sg_nodes.append(PolicyNode(name=name, category="Segment Groups",
+                                        status="active" if enabled else "disabled",
+                                        count=len(app_names)))
+            sg_app_map[name] = app_names
+            # Connect policies to segment groups
+            for pol_name, seg_names in policy_segment_map.items():
+                if name in seg_names:
+                    connections.append(("Access Policies", pol_name, "Segment Groups", name))
+        if sg_nodes:
+            columns["Segment Groups"] = sg_nodes
+
+        # Application Segments
+        segments = self._safe_list(d.get("segments"))
+        seg_nodes = []
+        seg_server_map: dict[str, list[str]] = {}
+        segments_with_policies = set()
+        for s in segments:
+            if not isinstance(s, dict):
+                continue
+            name = s.get("name", "Unknown")
+            enabled = s.get("enabled", False)
+            seg_nodes.append(PolicyNode(name=name, category="App Segments",
+                                         status="active" if enabled else "disabled"))
+            # Check server groups
+            sgs = s.get("serverGroups", [])
+            if isinstance(sgs, list):
+                for sg_ref in sgs:
+                    if isinstance(sg_ref, dict):
+                        sg_name = sg_ref.get("name", "")
+                        if sg_name:
+                            seg_server_map.setdefault(name, []).append(sg_name)
+            # Track which segments are referenced by segment groups
+            for sg_name, app_names in sg_app_map.items():
+                if name in app_names:
+                    connections.append(("Segment Groups", sg_name, "App Segments", name))
+                    segments_with_policies.add(name)
+        if seg_nodes:
+            columns["App Segments"] = seg_nodes
+
+        # Detect segments without policies
+        for s in seg_nodes:
+            if s.name not in segments_with_policies and s.status == "active":
+                anomalies.append(f"Segment '{s.name}' has no associated policy")
+                s.status = "warning"
+
+        # Server Groups
+        srv_groups = self._safe_list(d.get("server_groups"))
+        srv_nodes = []
+        for sg in srv_groups:
+            if not isinstance(sg, dict):
+                continue
+            name = sg.get("name", "Unknown")
+            enabled = sg.get("enabled", True)
+            srv_nodes.append(PolicyNode(name=name, category="Server Groups",
+                                         status="active" if enabled else "disabled"))
+            # Connect segments to server groups
+            for seg_name, sg_names in seg_server_map.items():
+                if name in sg_names:
+                    connections.append(("App Segments", seg_name, "Server Groups", name))
+        if srv_nodes:
+            columns["Server Groups"] = srv_nodes
+
+        # Connectors
+        conn_groups = self._safe_list(d.get("connector_groups"))
+        conn_nodes = []
+        for cg in conn_groups:
+            if not isinstance(cg, dict):
+                continue
+            name = cg.get("name", "Unknown")
+            connectors = cg.get("connectors", [])
+            enabled_count = 0
+            if isinstance(connectors, list):
+                enabled_count = sum(1 for c in connectors if isinstance(c, dict) and c.get("enabled"))
+            total = len(connectors) if isinstance(connectors, list) else 0
+            status = "active" if enabled_count == total and total > 0 else "warning" if enabled_count > 0 else "disabled"
+            conn_nodes.append(PolicyNode(name=name, category="Connectors",
+                                          status=status, count=total,
+                                          detail=f"{enabled_count}/{total} enabled"))
+        if conn_nodes:
+            columns["Connectors"] = conn_nodes
+
+        # Forwarding rules
+        fwd = self._safe_list(d.get("forwarding_rules"))
+        if fwd and not policy_nodes:
+            fwd_nodes = []
+            for r in fwd:
+                if isinstance(r, dict):
+                    name = r.get("name", "Unknown")
+                    fwd_nodes.append(PolicyNode(name=name, category="Forwarding Rules", status="active"))
+            if fwd_nodes:
+                columns["Forwarding Rules"] = fwd_nodes
+
+        self._policy_map.set_flow_data(columns, connections, anomalies)
+
+    def _populate_connectors_from_groups(self):
+        """Populate connectors page from connector groups data."""
+        groups = self._safe_list(self._raw_data.get("connector_groups"))
+
+        while self._connectors_container.count():
+            item = self._connectors_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not groups:
+            lbl = QLabel("No connector groups found.")
+            lbl.setObjectName("subtitle")
+            self._connectors_container.addWidget(lbl)
+            self._connectors_container.addStretch()
+            return
+
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+
+            # Group header
+            group_card = QFrame()
+            group_card.setObjectName("glassCard")
+            gl = QVBoxLayout(group_card)
+            gl.setContentsMargins(16, 12, 16, 12)
+            gl.setSpacing(4)
+
+            group_name = group.get("name", "Unknown Group")
+            name_lbl = QLabel(group_name)
+            name_lbl.setFont(QFont(".AppleSystemUIFont", 14, QFont.Weight.Bold))
+            gl.addWidget(name_lbl)
+
+            connectors = group.get("connectors", [])
+            if isinstance(connectors, list) and connectors:
+                for conn in connectors:
+                    if not isinstance(conn, dict):
+                        continue
+                    row = QHBoxLayout()
+                    cname = conn.get("name", "Unknown")
+                    cl = QLabel(f"  {cname}")
+                    cl.setFont(QFont(".AppleSystemUIFont", 12))
+                    row.addWidget(cl, 1)
+
+                    enabled = conn.get("enabled", False)
+                    status_lbl = QLabel("Enabled" if enabled else "Disabled")
+                    status_lbl.setObjectName("statusGood" if enabled else "statusWarn")
+                    row.addWidget(status_lbl)
+                    gl.addLayout(row)
+            else:
+                no_conn = QLabel("  No connectors in this group")
+                no_conn.setObjectName("subtitle")
+                gl.addWidget(no_conn)
+
+            self._connectors_container.addWidget(group_card)
+
+        self._connectors_container.addStretch()
+
+    def _populate_segments_list(self):
+        segments = self._safe_list(self._raw_data.get("segments"))
+
+        while self._segments_container.count():
+            item = self._segments_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not segments:
+            lbl = QLabel("No application segments found.")
+            lbl.setObjectName("subtitle")
+            self._segments_container.addWidget(lbl)
+            self._segments_container.addStretch()
+            return
+
+        for seg in segments[:50]:
+            if not isinstance(seg, dict):
+                continue
+            card = QFrame()
+            card.setObjectName("glassCard")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(16, 12, 16, 12)
+            cl.setSpacing(4)
+
+            name = seg.get("name", "Unknown Segment")
+            name_lbl = QLabel(name)
+            name_lbl.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Medium))
+            cl.addWidget(name_lbl)
+
+            domain_names = seg.get("domainNames", [])
+            if domain_names and isinstance(domain_names, list):
+                domains_str = ", ".join(domain_names[:5])
+                if len(domain_names) > 5:
+                    domains_str += f" (+{len(domain_names) - 5} more)"
+                domains_lbl = QLabel(domains_str)
+                domains_lbl.setObjectName("subtitle")
+                domains_lbl.setWordWrap(True)
+                cl.addWidget(domains_lbl)
+
+            enabled = seg.get("enabled", False)
+            status_lbl = QLabel("Active" if enabled else "Inactive")
+            status_lbl.setObjectName("statusGood" if enabled else "statusWarn")
+            cl.addWidget(status_lbl)
+
+            self._segments_container.addWidget(card)
+
+        self._segments_container.addStretch()
+
+    def _update_threats_page(self):
+        """Populate threats & insights page."""
+        d = self._raw_data
+
+        # Update summary cards
+        incidents = self._safe_list(d.get("incidents"))
+        card = self._threat_cards.card("incidents")
+        if card:
+            card.set_value(str(len(incidents)))
+
+        threats = self._safe_list(d.get("threat_classes"))
+        card = self._threat_cards.card("threats")
+        if card:
+            card.set_value(str(len(threats)))
+
+        shadow = self._safe_list(d.get("shadow_it"))
+        card = self._threat_cards.card("shadow_it")
+        if card:
+            card.set_value(str(len(shadow)))
+
+        atp = self._safe_list(d.get("atp_urls"))
+        card = self._threat_cards.card("atp")
+        if card:
+            card.set_value(str(len(atp)))
+
+        # Populate detail area
+        while self._threats_layout.count():
+            item = self._threats_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        has_data = False
+
+        # Cyber incidents
+        if incidents:
+            has_data = True
+            section = QLabel("Recent Cyber Incidents")
+            section.setObjectName("cardTitle")
+            self._threats_layout.addWidget(section)
+
+            for inc in incidents[:20]:
+                if not isinstance(inc, dict):
+                    continue
+                card = QFrame()
+                card.setObjectName("glassCard")
+                cl = QHBoxLayout(card)
+                cl.setContentsMargins(14, 8, 14, 8)
+
+                severity = inc.get("severity", inc.get("riskScore", ""))
+                sev_lbl = QLabel(str(severity))
+                sev_lbl.setStyleSheet("color: #FF6B6B; font-weight: 700;")
+                sev_lbl.setFixedWidth(50)
+                cl.addWidget(sev_lbl)
+
+                name = inc.get("name", inc.get("category", inc.get("type", "Unknown")))
+                n_lbl = QLabel(str(name))
+                n_lbl.setFont(QFont(".AppleSystemUIFont", 11))
+                n_lbl.setWordWrap(True)
+                cl.addWidget(n_lbl, 1)
+
+                count = inc.get("count", inc.get("totalCount", ""))
+                if count:
+                    c_lbl = QLabel(str(count))
+                    c_lbl.setStyleSheet("color: #FFB347; font-weight: 600;")
+                    cl.addWidget(c_lbl)
+
+                self._threats_layout.addWidget(card)
+
+        # Threat categories
+        if threats:
+            has_data = True
+            section = QLabel("Threat Categories")
+            section.setObjectName("cardTitle")
+            self._threats_layout.addWidget(section)
+
+            for t in threats[:15]:
+                if not isinstance(t, dict):
+                    continue
+                card = QFrame()
+                card.setObjectName("glassCard")
+                cl = QHBoxLayout(card)
+                cl.setContentsMargins(14, 8, 14, 8)
+
+                name = t.get("name", t.get("threatClass", str(t)))
+                n_lbl = QLabel(str(name))
+                n_lbl.setFont(QFont(".AppleSystemUIFont", 11))
+                cl.addWidget(n_lbl, 1)
+
+                count = t.get("count", t.get("totalCount", ""))
+                if count:
+                    c_lbl = QLabel(str(count))
+                    c_lbl.setStyleSheet("color: #FFB347; font-weight: 600;")
+                    cl.addWidget(c_lbl)
+
+                self._threats_layout.addWidget(card)
+
+        # Shadow IT
+        if shadow:
+            has_data = True
+            section = QLabel("Shadow IT Applications Detected")
+            section.setObjectName("cardTitle")
+            self._threats_layout.addWidget(section)
+
+            for app in shadow[:15]:
+                if not isinstance(app, dict):
+                    continue
+                card = QFrame()
+                card.setObjectName("glassCard")
+                cl = QHBoxLayout(card)
+                cl.setContentsMargins(14, 8, 14, 8)
+
+                name = app.get("name", app.get("appName", str(app)))
+                n_lbl = QLabel(str(name))
+                n_lbl.setFont(QFont(".AppleSystemUIFont", 11))
+                cl.addWidget(n_lbl, 1)
+
+                risk = app.get("riskScore", app.get("risk", ""))
+                if risk:
+                    r_lbl = QLabel(f"Risk: {risk}")
+                    r_lbl.setStyleSheet("color: #BB86FC; font-weight: 600;")
+                    cl.addWidget(r_lbl)
+
+                self._threats_layout.addWidget(card)
+
+        # ATP Malicious URLs
+        if atp:
+            has_data = True
+            section = QLabel("ATP Malicious URLs")
+            section.setObjectName("cardTitle")
+            self._threats_layout.addWidget(section)
+
+            for url in atp[:10]:
+                if isinstance(url, dict):
+                    url_str = url.get("url", str(url))
+                else:
+                    url_str = str(url)
+                card = QFrame()
+                card.setObjectName("glassCard")
+                cl = QHBoxLayout(card)
+                cl.setContentsMargins(14, 8, 14, 8)
+                lbl = QLabel(str(url_str))
+                lbl.setFont(QFont("Menlo", 10))
+                lbl.setStyleSheet("color: #FF4444;")
+                lbl.setWordWrap(True)
+                cl.addWidget(lbl)
+                self._threats_layout.addWidget(card)
+
+        if not has_data:
+            lbl = QLabel("No threat data available. This may be normal if ZInsights tools returned empty results.")
+            lbl.setObjectName("subtitle")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setWordWrap(True)
+            self._threats_layout.addWidget(lbl)
+
+        self._threats_layout.addStretch()
+
+    def _detect_anomalies(self):
+        """Run anomaly detection across all collected data."""
+        d = self._raw_data
+        findings: list[Finding] = []
+
+        # 1. Disabled connectors
+        groups = self._safe_list(d.get("connector_groups"))
+        for g in groups:
+            if not isinstance(g, dict):
+                continue
+            connectors = g.get("connectors", [])
+            if isinstance(connectors, list):
+                for c in connectors:
+                    if isinstance(c, dict) and not c.get("enabled", True):
+                        findings.append(Finding(
+                            severity="high",
+                            title=f"Connector disabled: {c.get('name', 'Unknown')}",
+                            detail=f"In group '{g.get('name', '?')}'. Disabled connectors cannot serve traffic.",
+                            source="Connector Health",
+                        ))
+
+        # 2. Segments without server groups (no backend)
+        segments = self._safe_list(d.get("segments"))
+        for s in segments:
+            if not isinstance(s, dict) or not s.get("enabled"):
+                continue
+            sgs = s.get("serverGroups", [])
+            if not sgs or (isinstance(sgs, list) and len(sgs) == 0):
+                findings.append(Finding(
+                    severity="medium",
+                    title=f"Segment has no server groups: {s.get('name', '?')}",
+                    detail="Active segment without backend servers may not route traffic.",
+                    source="Policy Audit",
+                ))
+
+        # 3. Firewall rules without DLP
+        fw_rules = self._safe_list(d.get("firewall_rules"))
+        dlp_rules = self._safe_list(d.get("dlp_rules"))
+        if fw_rules and not dlp_rules:
+            findings.append(Finding(
+                severity="medium",
+                title="Firewall rules exist but no DLP rules configured",
+                detail="Consider adding DLP rules to prevent data exfiltration.",
+                source="Policy Audit",
+            ))
+
+        # 4. No SSL inspection
+        ssl_rules = self._safe_list(d.get("ssl_rules"))
+        if not ssl_rules:
+            findings.append(Finding(
+                severity="high",
+                title="No SSL inspection rules configured",
+                detail="Without SSL inspection, encrypted traffic cannot be analyzed for threats.",
+                source="Policy Audit",
+            ))
+
+        # 5. Auth exempt URLs
+        auth_exempt = self._safe_list(d.get("auth_exempt"))
+        if auth_exempt:
+            findings.append(Finding(
+                severity="medium",
+                title=f"{len(auth_exempt)} authentication-exempt URLs configured",
+                detail="Auth-exempt URLs bypass authentication. Review if all are still needed.",
+                source="ZIA Config",
+            ))
+            for url_entry in auth_exempt[:5]:
+                url_str = url_entry.get("url", str(url_entry)) if isinstance(url_entry, dict) else str(url_entry)
+                findings.append(Finding(
+                    severity="low",
+                    title=f"Auth-exempt URL: {url_str}",
+                    detail="",
+                    source="ZIA Config",
+                ))
+
+        # 6. ATP malicious URLs found
+        atp = self._safe_list(d.get("atp_urls"))
+        if atp:
+            findings.append(Finding(
+                severity="high",
+                title=f"{len(atp)} malicious URLs detected by ATP",
+                detail="These URLs have been flagged as malicious. Ensure they are blocked.",
+                source="ZIA ATP",
+            ))
+
+        # 7. ZEASM findings
+        zeasm = self._safe_list(d.get("zeasm_findings"))
+        for f in zeasm[:20]:
+            if not isinstance(f, dict):
+                continue
+            sev = str(f.get("severity", f.get("risk", "medium"))).lower()
+            if sev not in ("critical", "high", "medium", "low", "info"):
+                sev = "medium"
+            findings.append(Finding(
+                severity=sev,
+                title=f.get("title", f.get("name", f.get("finding", "ZEASM Finding"))),
+                detail=f.get("description", f.get("detail", "")),
+                source="ZEASM",
+            ))
+
+        # 8. Lookalike domains
+        lookalikes = self._safe_list(d.get("lookalike_domains"))
+        if lookalikes:
+            findings.append(Finding(
+                severity="high",
+                title=f"{len(lookalikes)} lookalike domains detected",
+                detail="These domains may be used for phishing attacks targeting your organization.",
+                source="ZEASM",
+            ))
+            for dom in lookalikes[:5]:
+                dname = dom.get("domain", str(dom)) if isinstance(dom, dict) else str(dom)
+                findings.append(Finding(
+                    severity="medium",
+                    title=f"Lookalike domain: {dname}",
+                    detail="",
+                    source="ZEASM",
+                ))
+
+        # 9. Shadow IT apps
+        shadow = self._safe_list(d.get("shadow_it"))
+        if shadow:
+            high_risk = [a for a in shadow if isinstance(a, dict) and
+                         (a.get("riskScore", 0) or 0) >= 7]
+            if high_risk:
+                findings.append(Finding(
+                    severity="high",
+                    title=f"{len(high_risk)} high-risk Shadow IT applications detected",
+                    detail="These unsanctioned apps pose security risks.",
+                    source="ZInsights",
+                ))
+
+        # 10. Segment groups without policies
+        seg_groups = self._safe_list(d.get("segment_groups"))
+        policies = self._safe_list(d.get("access_policies"))
+        if seg_groups and not policies:
+            findings.append(Finding(
+                severity="high",
+                title="Segment groups exist but no access policies found",
+                detail="Without access policies, segment groups may not be properly protected.",
+                source="Policy Audit",
+            ))
+
+        self._findings_panel.set_findings(findings)
+        self._log(f"Anomaly detection complete: {len(findings)} findings")
+
+    def _compute_smart_score(self):
+        """Compute security posture score with detailed breakdown."""
+        d = self._raw_data
+        score = 0
+        breakdown = []
+        recommendations = []
+
+        # SSL Inspection (+10)
+        ssl = self._safe_list(d.get("ssl_rules"))
+        if ssl:
+            score += 10
+            breakdown.append(f"+10  SSL inspection ({len(ssl)} rules)")
+        else:
+            breakdown.append("+0   No SSL inspection")
+            recommendations.append("Add SSL inspection rules to analyze encrypted traffic")
+
+        # DLP Rules (+10)
+        dlp = self._safe_list(d.get("dlp_rules"))
+        if dlp:
+            score += 10
+            breakdown.append(f"+10  DLP rules ({len(dlp)})")
+        else:
+            breakdown.append("+0   No DLP rules")
+            recommendations.append("Configure DLP rules to prevent data leakage")
+
+        # URL Filtering (+10)
+        url = self._safe_list(d.get("url_rules"))
+        if url:
+            score += 10
+            breakdown.append(f"+10  URL filtering ({len(url)} rules)")
+        else:
+            breakdown.append("+0   No URL filtering")
+            recommendations.append("Add URL filtering rules")
+
+        # Firewall Rules (+10)
+        fw = self._safe_list(d.get("firewall_rules"))
+        if fw:
+            score += 10
+            breakdown.append(f"+10  Firewall rules ({len(fw)})")
+        else:
+            breakdown.append("+0   No firewall rules")
+            recommendations.append("Configure cloud firewall rules")
+
+        # Access Policies (+10)
+        policies = self._safe_list(d.get("access_policies"))
+        if policies:
+            score += 10
+            breakdown.append(f"+10  Access policies ({len(policies)})")
+        else:
+            breakdown.append("+0   No access policies")
+            recommendations.append("Create ZPA access policies")
+
+        # Connectors health (+5 per group with all enabled, max 20)
+        groups = self._safe_list(d.get("connector_groups"))
+        healthy_groups = 0
+        total_disabled = 0
+        for g in groups:
+            if not isinstance(g, dict):
+                continue
+            conns = g.get("connectors", [])
+            if isinstance(conns, list) and conns:
+                all_enabled = all(c.get("enabled", False) for c in conns if isinstance(c, dict))
+                if all_enabled:
+                    healthy_groups += 1
+                else:
+                    total_disabled += sum(1 for c in conns if isinstance(c, dict) and not c.get("enabled"))
+        connector_score = min(20, healthy_groups * 5)
+        score += connector_score
+        breakdown.append(f"+{connector_score:<3d} Connector health ({healthy_groups} healthy groups)")
+        if total_disabled:
+            score -= min(10, total_disabled * 2)
+            breakdown.append(f"-{min(10, total_disabled * 2):<3d} Disabled connectors ({total_disabled})")
+            recommendations.append(f"Enable {total_disabled} disabled connectors")
+
+        # Sandbox/ATP (+5)
+        atp = self._safe_list(d.get("atp_urls"))
+        # Having ATP configured is good, but malicious URLs reduce score
+        if d.get("atp_urls") is not None:  # API responded (even if empty)
+            score += 5
+            breakdown.append("+5   ATP active")
+            if atp:
+                penalty = min(10, len(atp))
+                score -= penalty
+                breakdown.append(f"-{penalty:<3d} Malicious URLs detected ({len(atp)})")
+        else:
+            breakdown.append("+0   ATP status unknown")
+
+        # Segment coverage (+10)
+        segments = self._safe_list(d.get("segments"))
+        enabled_segs = [s for s in segments if isinstance(s, dict) and s.get("enabled")]
+        if enabled_segs:
+            score += min(10, len(enabled_segs))
+            breakdown.append(f"+{min(10, len(enabled_segs)):<3d} Active segments ({len(enabled_segs)})")
+
+        # Clamp
+        score = max(0, min(100, score))
+
+        # Update gauge
+        self._gauge.set_score(score)
+
+        # Update breakdown text
+        breakdown_text = "\n".join(breakdown)
+        self._score_breakdown.setText(breakdown_text)
+
+        # Update recommendations
+        if recommendations:
+            rec_text = "<b>Recommendations:</b><br>"
+            for r in recommendations:
+                rec_text += f"  • {r}<br>"
+            self._recommendations_label.setText(rec_text)
+        else:
+            self._recommendations_label.setText(
+                "<span style='color: #00E676; font-weight: 600;'>All key security controls are in place.</span>"
+            )
+
+        self._log(f"Security posture score: {score}/100")
 
     async def _safe_call(self, tool_name: str, args: dict | None = None):
         if not self._mcp:
@@ -672,7 +1439,7 @@ class DashboardWindow(QMainWindow):
             card_layout.setSpacing(4)
 
             name_label = QLabel(tool.name)
-            name_label.setFont(QFont("SF Mono", 12, QFont.Weight.Bold))
+            name_label.setFont(QFont("Menlo", 12, QFont.Weight.Bold))
             name_label.setStyleSheet("color: #00D4AA;")
             card_layout.addWidget(name_label)
 
@@ -697,85 +1464,6 @@ class DashboardWindow(QMainWindow):
             if match:
                 visible += 1
         self._tool_count_label.setText(f"{visible} tools")
-
-    def _populate_connectors(self, data: list):
-        # Clear
-        while self._connectors_container.count():
-            item = self._connectors_container.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        if not data:
-            lbl = QLabel("No connectors found.")
-            lbl.setObjectName("subtitle")
-            self._connectors_container.addWidget(lbl)
-            return
-
-        for conn in data[:50]:
-            if not isinstance(conn, dict):
-                continue
-            card = QFrame()
-            card.setObjectName("glassCard")
-            cl = QHBoxLayout(card)
-            cl.setContentsMargins(16, 12, 16, 12)
-
-            name = conn.get("name", "Unknown")
-            enabled = conn.get("enabled", False)
-
-            name_lbl = QLabel(name)
-            name_lbl.setFont(QFont("SF Pro Display", 13, QFont.Weight.Medium))
-            cl.addWidget(name_lbl, 1)
-
-            status_lbl = QLabel("Enabled" if enabled else "Disabled")
-            status_lbl.setObjectName("statusGood" if enabled else "statusWarn")
-            cl.addWidget(status_lbl)
-
-            self._connectors_container.addWidget(card)
-
-        self._connectors_container.addStretch()
-
-    def _populate_segments(self, data: list):
-        while self._segments_container.count():
-            item = self._segments_container.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        if not data:
-            lbl = QLabel("No application segments found.")
-            lbl.setObjectName("subtitle")
-            self._segments_container.addWidget(lbl)
-            return
-
-        for seg in data[:50]:
-            if not isinstance(seg, dict):
-                continue
-            card = QFrame()
-            card.setObjectName("glassCard")
-            cl = QVBoxLayout(card)
-            cl.setContentsMargins(16, 12, 16, 12)
-            cl.setSpacing(4)
-
-            name = seg.get("name", "Unknown Segment")
-            name_lbl = QLabel(name)
-            name_lbl.setFont(QFont("SF Pro Display", 13, QFont.Weight.Medium))
-            cl.addWidget(name_lbl)
-
-            domain_names = seg.get("domainNames", [])
-            if domain_names and isinstance(domain_names, list):
-                domains_str = ", ".join(domain_names[:5])
-                domains_lbl = QLabel(domains_str)
-                domains_lbl.setObjectName("subtitle")
-                domains_lbl.setWordWrap(True)
-                cl.addWidget(domains_lbl)
-
-            enabled = seg.get("enabled", False)
-            status_lbl = QLabel("Active" if enabled else "Inactive")
-            status_lbl.setObjectName("statusGood" if enabled else "statusWarn")
-            cl.addWidget(status_lbl)
-
-            self._segments_container.addWidget(card)
-
-        self._segments_container.addStretch()
 
     # ── Helpers ──
 
