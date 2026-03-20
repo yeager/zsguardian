@@ -1,4 +1,4 @@
-"""ZscalerGuardian — Zero Trust Security Dashboard for macOS.
+"""ZSGuardian — Zero Trust Security Dashboard for macOS.
 
 Entry point: launches the PySide6 app with async event loop integration,
 system tray icon, and main dashboard window.
@@ -25,7 +25,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("ZscalerGuardian")
+logger = logging.getLogger("ZSGuardian")
 
 
 def main():
@@ -35,8 +35,8 @@ def main():
     )
 
     app = QApplication(sys.argv)
-    app.setApplicationName("ZscalerGuardian")
-    app.setOrganizationName("ZscalerGuardian")
+    app.setApplicationName("ZSGuardian")
+    app.setOrganizationName("ZSGuardian")
     app.setQuitOnLastWindowClosed(False)  # Keep running in tray
 
     # Async event loop integration

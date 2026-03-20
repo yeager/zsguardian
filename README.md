@@ -1,4 +1,4 @@
-# ZscalerGuardian — Zero Trust Security Dashboard
+# ZSGuardian — Zero Trust Security Dashboard
 
 A modern macOS menubar + dashboard application that connects to the [Zscaler MCP Server](https://github.com/zscaler/zscaler-mcp-server) and provides real-time visibility into your entire Zscaler Zero Trust environment.
 
@@ -31,11 +31,11 @@ cd zscaler-guardian
 pip install -r requirements.txt
 
 # (Optional) Store credentials in Keychain ahead of time
-security add-generic-password -s "zscaler-mcp-client-id" -a "zscaler-guardian" -w "YOUR_CLIENT_ID" -U
-security add-generic-password -s "zscaler-mcp-client-secret" -a "zscaler-guardian" -w "YOUR_SECRET" -U
-security add-generic-password -s "zscaler-mcp-customer-id" -a "zscaler-guardian" -w "YOUR_CUSTOMER_ID" -U
-security add-generic-password -s "zscaler-mcp-vanity-domain" -a "zscaler-guardian" -w "YOUR_DOMAIN" -U
-security add-generic-password -s "zscaler-mcp-zia-cloud" -a "zscaler-guardian" -w "YOUR_ZIA_CLOUD" -U
+security add-generic-password -s "zscaler-mcp-client-id" -a "zsguardian" -w "YOUR_CLIENT_ID" -U
+security add-generic-password -s "zscaler-mcp-client-secret" -a "zsguardian" -w "YOUR_SECRET" -U
+security add-generic-password -s "zscaler-mcp-customer-id" -a "zsguardian" -w "YOUR_CUSTOMER_ID" -U
+security add-generic-password -s "zscaler-mcp-vanity-domain" -a "zsguardian" -w "YOUR_DOMAIN" -U
+security add-generic-password -s "zscaler-mcp-zia-cloud" -a "zsguardian" -w "YOUR_ZIA_CLOUD" -U
 ```
 
 ## Usage

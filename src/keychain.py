@@ -75,7 +75,7 @@ def write_keychain(service: str, value: str) -> bool:
                 "security",
                 "add-generic-password",
                 "-s", service,
-                "-a", "zscaler-guardian",
+                "-a", "zsguardian",
                 "-w", value,
                 "-U",
             ],

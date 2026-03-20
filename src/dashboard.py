@@ -1,4 +1,4 @@
-"""Main dashboard window for ZscalerGuardian."""
+"""Main dashboard window for ZSGuardian."""
 
 import asyncio
 import logging
@@ -52,7 +52,7 @@ class SettingsDialog(QDialog):
 
     def __init__(self, credentials: ZscalerCredentials, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("ZscalerGuardian Settings")
+        self.setWindowTitle("ZSGuardian Settings")
         self.setMinimumSize(520, 480)
         self._credentials = credentials
         self._fields: dict[str, QLineEdit] = {}
@@ -143,13 +143,13 @@ class SettingsDialog(QDialog):
 # ─── Main Dashboard ──────────────────────────────────────────
 
 class DashboardWindow(QMainWindow):
-    """The main ZscalerGuardian dashboard window."""
+    """The main ZSGuardian dashboard window."""
 
     request_refresh = Signal()
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ZscalerGuardian")
+        self.setWindowTitle("ZSGuardian")
         self.setMinimumSize(1100, 720)
         self.resize(1360, 880)
 
@@ -186,7 +186,7 @@ class DashboardWindow(QMainWindow):
         sidebar_layout.setSpacing(4)
 
         # Logo area
-        logo = QLabel("ZscalerGuardian")
+        logo = QLabel("ZSGuardian")
         logo.setFont(QFont(".AppleSystemUIFont", 16, QFont.Weight.Bold))
         logo.setStyleSheet("color: #00D4AA; padding: 8px;")
         sidebar_layout.addWidget(logo)

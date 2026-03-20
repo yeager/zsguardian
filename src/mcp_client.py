@@ -69,7 +69,7 @@ class ZscalerMCPClient:
         result = await self._send_request("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "ZscalerGuardian", "version": "1.0.0"},
+            "clientInfo": {"name": "ZSGuardian", "version": "1.0.0"},
         })
 
         if result is None:

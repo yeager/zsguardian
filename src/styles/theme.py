@@ -1,4 +1,4 @@
-"""Glassmorphism theme with dark/light mode support for ZscalerGuardian."""
+"""Glassmorphism theme with dark/light mode support for ZSGuardian."""
 
 from PySide6.QtGui import QColor, QLinearGradient, QFont
 

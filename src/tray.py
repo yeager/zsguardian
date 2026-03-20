@@ -1,4 +1,4 @@
-"""System tray icon for ZscalerGuardian."""
+"""System tray icon for ZSGuardian."""
 
 from PySide6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor, QFont, QRadialGradient
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu
@@ -44,7 +44,7 @@ class TrayManager(QObject):
         super().__init__(parent)
         self._tray = QSystemTrayIcon(parent)
         self._tray.setIcon(QIcon(create_tray_icon_pixmap(False)))
-        self._tray.setToolTip("ZscalerGuardian — Disconnected")
+        self._tray.setToolTip("ZSGuardian — Disconnected")
 
         self._menu = QMenu()
 
@@ -69,7 +69,7 @@ class TrayManager(QObject):
 
         self._menu.addSeparator()
 
-        quit_action = QAction("Quit ZscalerGuardian")
+        quit_action = QAction("Quit ZSGuardian")
         quit_action.triggered.connect(self.quit_app.emit)
         self._menu.addAction(quit_action)
 
@@ -83,10 +83,10 @@ class TrayManager(QObject):
         self._tray.setIcon(QIcon(create_tray_icon_pixmap(connected)))
         if connected:
             self._status_action.setText(f"Connected ({tool_count} tools)")
-            self._tray.setToolTip(f"ZscalerGuardian — Connected ({tool_count} tools)")
+            self._tray.setToolTip(f"ZSGuardian — Connected ({tool_count} tools)")
         else:
             self._status_action.setText("Status: Disconnected")
-            self._tray.setToolTip("ZscalerGuardian — Disconnected")
+            self._tray.setToolTip("ZSGuardian — Disconnected")
 
     def notify(self, title: str, message: str):
         self._tray.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 5000)
