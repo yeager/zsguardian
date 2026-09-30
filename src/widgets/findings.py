@@ -145,7 +145,7 @@ class FindingsPanel(QFrame):
         self._container_layout.addWidget(self._placeholder)
         self._container_layout.addStretch()
 
-    def set_findings(self, findings: list[Finding]):
+    def set_findings(self, findings: list[Finding], *, incomplete: bool = False):
         # Clear
         while self._container_layout.count():
             item = self._container_layout.takeAt(0)
@@ -164,11 +164,18 @@ class FindingsPanel(QFrame):
             c = counts.get(sev, 0)
             lbl.setText(f"{sev.upper()}: {c}")
 
-        self._count_label.setText(f"{len(sorted_findings)} findings")
+        self._count_label.setText(
+            f"{len(sorted_findings)} findings · checks incomplete"
+            if incomplete else f"{len(sorted_findings)} findings"
+        )
+        self._count_label.setObjectName("statusWarn" if incomplete else "subtitle")
 
         if not sorted_findings:
-            lbl = QLabel("No findings detected — looking good!")
-            lbl.setObjectName("statusGood")
+            lbl = QLabel(
+                "Some checks could not be completed. Retry before treating this as a clean result."
+                if incomplete else "No findings detected — looking good!"
+            )
+            lbl.setObjectName("statusWarn" if incomplete else "statusGood")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._container_layout.addWidget(lbl)
         else:

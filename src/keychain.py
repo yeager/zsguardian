@@ -57,19 +57,14 @@ def read_keychain(service: str) -> str | None:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         pass
     return None
 
 
 def write_keychain(service: str, value: str) -> bool:
-    # Delete existing entry first (ignore errors if it doesn't exist)
-    subprocess.run(
-        ["security", "delete-generic-password", "-s", service],
-        capture_output=True,
-        timeout=5,
-    )
     try:
+        # `-U` replaces an existing item without a delete/create gap.
         result = subprocess.run(
             [
                 "security",
@@ -84,7 +79,21 @@ def write_keychain(service: str, value: str) -> bool:
             timeout=5,
         )
         return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
+
+def delete_keychain(service: str) -> bool:
+    """Delete a saved item; a missing item is already the desired state."""
+    try:
+        result = subprocess.run(
+            ["security", "delete-generic-password", "-s", service],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0 or "could not be found" in result.stderr.lower()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
 
 
@@ -104,4 +113,6 @@ def save_credentials(creds: ZscalerCredentials) -> bool:
         if value:
             if not write_keychain(service, value):
                 success = False
+        elif not delete_keychain(service):
+            success = False
     return success

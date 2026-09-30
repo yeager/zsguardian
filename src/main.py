@@ -53,6 +53,7 @@ def main():
     tray.show_settings.connect(dashboard.show_settings)
     tray.quit_app.connect(app.quit)
     tray.refresh_data.connect(lambda: asyncio.ensure_future(dashboard.refresh()))
+    app.aboutToQuit.connect(dashboard.shutdown)
     tray.show()
 
     # Check if credentials exist — show settings if not

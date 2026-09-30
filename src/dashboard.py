@@ -34,6 +34,9 @@ from keychain import (
     ZscalerCredentials,
     load_credentials,
     save_credentials,
+    read_keychain,
+    write_keychain,
+    delete_keychain,
 )
 from mcp_client import ZscalerMCPClient
 from styles.theme import DARK_THEME, LIGHT_THEME, get_stylesheet
@@ -50,11 +53,11 @@ logger = logging.getLogger(__name__)
 class SettingsDialog(QDialog):
     """Credentials & preferences settings dialog."""
 
-    def __init__(self, credentials: ZscalerCredentials, parent=None):
+    def __init__(self, credentials: ZscalerCredentials, write_tools: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle("ZSGuardian Settings")
         self.setMinimumSize(520, 480)
-        self._credentials = credentials
+        self._credentials = ZscalerCredentials(**vars(credentials))
         self._fields: dict[str, QLineEdit] = {}
 
         layout = QVBoxLayout(self)
@@ -95,12 +98,14 @@ class SettingsDialog(QDialog):
         adv_label.setObjectName("cardTitle")
         layout.addWidget(adv_label)
 
-        self._write_tools_check = QCheckBox("Enable write tools (requires --enable-write-tools)")
+        self._write_tools_check = QCheckBox("Enable write tools (explicit allowlist required)")
+        self._write_tools_check.setChecked(bool(write_tools))
         layout.addWidget(self._write_tools_check)
 
         self._write_pattern = QLineEdit()
         self._write_pattern.setPlaceholderText("Write tools pattern (e.g., 'update_*')")
-        self._write_pattern.setEnabled(False)
+        self._write_pattern.setText(write_tools)
+        self._write_pattern.setEnabled(bool(write_tools))
         self._write_tools_check.toggled.connect(self._write_pattern.setEnabled)
         layout.addWidget(self._write_pattern)
 
@@ -122,10 +127,21 @@ class SettingsDialog(QDialog):
         layout.addLayout(btn_row)
 
     def _save(self):
+        patterns = [part.strip() for part in self._write_pattern.text().split(",")]
+        if self._write_tools_check.isChecked() and (
+            not any(patterns) or any(not pattern for pattern in patterns)
+        ):
+            QMessageBox.warning(self, "Write tools", "Enter an explicit write-tool allowlist, or leave write tools disabled.")
+            return
         for field_key, line in self._fields.items():
             setattr(self._credentials, field_key, line.text().strip())
 
-        if save_credentials(self._credentials):
+        pattern = ",".join(patterns) if self.write_tools_enabled() else ""
+        prefs_saved = (
+            write_keychain("zsguardian-write-tools-pattern", pattern)
+            if pattern else delete_keychain("zsguardian-write-tools-pattern")
+        )
+        if save_credentials(self._credentials) and prefs_saved:
             self.accept()
         else:
             QMessageBox.warning(self, "Error", "Failed to save some credentials to Keychain.")
@@ -161,12 +177,18 @@ class DashboardWindow(QMainWindow):
 
         # Store raw data for cross-referencing
         self._raw_data: dict = {}
+        self._data_errors: dict[str, str] = {}
+        self._write_tools = read_keychain("zsguardian-write-tools-pattern") or ""
 
         self._build_ui()
         self._apply_theme()
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
+
+    def shutdown(self):
+        if self._mcp:
+            self._mcp.terminate_now()
 
     # ── UI Construction ──
 
@@ -509,10 +531,11 @@ class DashboardWindow(QMainWindow):
     # ── Settings ──
 
     def show_settings(self):
-        dialog = SettingsDialog(self._credentials, self)
+        dialog = SettingsDialog(self._credentials, self._write_tools, self)
         dialog.setStyleSheet(get_stylesheet(self._theme))
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._credentials = dialog.get_credentials()
+            self._write_tools = dialog.write_tools_pattern() if dialog.write_tools_enabled() else ""
             self._log("Settings saved to Keychain.")
 
     # ── Connection ──
@@ -533,8 +556,14 @@ class DashboardWindow(QMainWindow):
         self._connect_btn.setText("Connecting...")
         self._connect_btn.setEnabled(False)
 
-        self._mcp = ZscalerMCPClient(self._credentials)
-        ok = await self._mcp.connect()
+        self._mcp = ZscalerMCPClient(self._credentials, write_tools=self._write_tools)
+        try:
+            ok = await self._mcp.connect()
+        except Exception as e:
+            self._log(f"MCP startup failed: {e}")
+            await self._mcp.disconnect()
+            self._mcp = None
+            ok = False
 
         if ok:
             tool_count = len(self._mcp.tools)
@@ -575,6 +604,7 @@ class DashboardWindow(QMainWindow):
 
         self._load_progress.setVisible(True)
         self._load_progress.setValue(5)
+        self._data_errors = {}
 
         tools = self._mcp.tools
         self._populate_tools_list(tools)
@@ -627,6 +657,19 @@ class DashboardWindow(QMainWindow):
             "ssl_rules": ssl_rules,
             "url_rules": url_rules,
         }
+        core_tool_keys = {
+            "zpa_list_access_policy_rules": "access_policies",
+            "zpa_list_forwarding_policy_rules": "forwarding_rules",
+            "zpa_list_app_connector_groups": "connector_groups",
+            "zpa_list_application_segments": "segments",
+            "zpa_list_segment_groups": "segment_groups",
+            "zpa_list_server_groups": "server_groups",
+            "zia_list_cloud_firewall_rules": "firewall_rules",
+            "zia_list_web_dlp_rules": "dlp_rules",
+            "zia_list_ssl_inspection_rules": "ssl_rules",
+            "zia_list_url_filtering_rules": "url_rules",
+        }
+        self._mark_missing_responses(core_tool_keys)
 
         # ── Phase 2: Threat intelligence (parallel) ──
         self._log("Fetching threat intelligence from ZInsights...")
@@ -655,6 +698,15 @@ class DashboardWindow(QMainWindow):
             "lookalike_domains": lookalike_domains,
             "auth_exempt": auth_exempt,
         })
+        self._mark_missing_responses({
+            "zinsights_get_cyber_incidents": "incidents",
+            "zinsights_get_threat_class": "threat_classes",
+            "zinsights_get_shadow_it_apps": "shadow_it",
+            "zia_list_atp_malicious_urls": "atp_urls",
+            "zeasm_list_findings": "zeasm_findings",
+            "zeasm_list_lookalike_domains": "lookalike_domains",
+            "zia_list_auth_exempt_urls": "auth_exempt",
+        })
 
         self._load_progress.setValue(70)
 
@@ -669,7 +721,16 @@ class DashboardWindow(QMainWindow):
 
         self._load_progress.setValue(100)
         QTimer.singleShot(800, lambda: self._load_progress.setVisible(False))
-        self._log("Data refresh complete.")
+        if self._data_errors:
+            self._log(f"Data refresh incomplete: {len(self._data_errors)} MCP calls failed.")
+        else:
+            self._log("Data refresh complete.")
+
+    def _mark_missing_responses(self, tool_keys: dict[str, str]):
+        """Keep failed calls distinct from successful empty API responses."""
+        for tool_name, data_key in tool_keys.items():
+            if self._raw_data.get(data_key) is None:
+                self._data_errors.setdefault(tool_name, "No usable response")
 
     # ── Update helpers ──
 
@@ -694,10 +755,10 @@ class DashboardWindow(QMainWindow):
         policies = self._safe_list(d.get("access_policies"))
         card = self._overview_cards.card("policies")
         if card:
-            card.set_value(str(len(policies)))
+            card.set_value("—" if d.get("access_policies") is None else str(len(policies)))
             active = sum(1 for p in policies if isinstance(p, dict) and
                          p.get("action", "").upper() == "ALLOW")
-            card.set_detail(f"{active} allow, {len(policies) - active} other")
+            card.set_detail("Data unavailable" if d.get("access_policies") is None else f"{active} allow, {len(policies) - active} other")
 
         # Connectors
         groups = self._safe_list(d.get("connector_groups"))
@@ -709,42 +770,45 @@ class DashboardWindow(QMainWindow):
                     total_connectors += len(conns)
         card = self._overview_cards.card("connectors")
         if card:
-            card.set_value(str(total_connectors))
-            card.set_detail(f"in {len(groups)} groups")
+            card.set_value("—" if d.get("connector_groups") is None else str(total_connectors))
+            card.set_detail("Data unavailable" if d.get("connector_groups") is None else f"in {len(groups)} groups")
 
         # Segments
         segs = self._safe_list(d.get("segments"))
         card = self._overview_cards.card("segments")
         if card:
-            card.set_value(str(len(segs)))
+            card.set_value("—" if d.get("segments") is None else str(len(segs)))
             enabled = sum(1 for s in segs if isinstance(s, dict) and s.get("enabled"))
-            card.set_detail(f"{enabled} enabled")
+            card.set_detail("Data unavailable" if d.get("segments") is None else f"{enabled} enabled")
 
         # Firewall
         fw = self._safe_list(d.get("firewall_rules"))
         card = self._overview_cards2.card("firewall")
         if card:
-            card.set_value(str(len(fw)))
+            card.set_value("—" if d.get("firewall_rules") is None else str(len(fw)))
             active = sum(1 for r in fw if isinstance(r, dict) and r.get("state") == "ENABLED")
-            card.set_detail(f"{active} active")
+            card.set_detail("Data unavailable" if d.get("firewall_rules") is None else f"{active} active")
 
         # DLP
         dlp = self._safe_list(d.get("dlp_rules"))
         card = self._overview_cards2.card("dlp")
         if card:
-            card.set_value(str(len(dlp)))
+            card.set_value("—" if d.get("dlp_rules") is None else str(len(dlp)))
+            card.set_detail("Data unavailable" if d.get("dlp_rules") is None else "")
 
         # SSL
         ssl = self._safe_list(d.get("ssl_rules"))
         card = self._overview_cards2.card("ssl")
         if card:
-            card.set_value(str(len(ssl)))
+            card.set_value("—" if d.get("ssl_rules") is None else str(len(ssl)))
+            card.set_detail("Data unavailable" if d.get("ssl_rules") is None else "")
 
         # URL filtering
         url = self._safe_list(d.get("url_rules"))
         card = self._overview_cards2.card("url")
         if card:
-            card.set_value(str(len(url)))
+            card.set_value("—" if d.get("url_rules") is None else str(len(url)))
+            card.set_detail("Data unavailable" if d.get("url_rules") is None else "")
 
     def _update_policy_flow(self):
         """Build real policy flow: Access Policies → Segment Groups → App Segments → Server Groups → Connectors."""
@@ -899,7 +963,7 @@ class DashboardWindow(QMainWindow):
                 item.widget().deleteLater()
 
         if not groups:
-            lbl = QLabel("No connector groups found.")
+            lbl = QLabel("Connector data unavailable." if self._raw_data.get("connector_groups") is None else "No connector groups found.")
             lbl.setObjectName("subtitle")
             self._connectors_container.addWidget(lbl)
             self._connectors_container.addStretch()
@@ -955,7 +1019,7 @@ class DashboardWindow(QMainWindow):
                 item.widget().deleteLater()
 
         if not segments:
-            lbl = QLabel("No application segments found.")
+            lbl = QLabel("Application segment data unavailable." if self._raw_data.get("segments") is None else "No application segments found.")
             lbl.setObjectName("subtitle")
             self._segments_container.addWidget(lbl)
             self._segments_container.addStretch()
@@ -1002,22 +1066,22 @@ class DashboardWindow(QMainWindow):
         incidents = self._safe_list(d.get("incidents"))
         card = self._threat_cards.card("incidents")
         if card:
-            card.set_value(str(len(incidents)))
+            card.set_value("—" if d.get("incidents") is None else str(len(incidents)))
 
         threats = self._safe_list(d.get("threat_classes"))
         card = self._threat_cards.card("threats")
         if card:
-            card.set_value(str(len(threats)))
+            card.set_value("—" if d.get("threat_classes") is None else str(len(threats)))
 
         shadow = self._safe_list(d.get("shadow_it"))
         card = self._threat_cards.card("shadow_it")
         if card:
-            card.set_value(str(len(shadow)))
+            card.set_value("—" if d.get("shadow_it") is None else str(len(shadow)))
 
         atp = self._safe_list(d.get("atp_urls"))
         card = self._threat_cards.card("atp")
         if card:
-            card.set_value(str(len(atp)))
+            card.set_value("—" if d.get("atp_urls") is None else str(len(atp)))
 
         # Populate detail area
         while self._threats_layout.count():
@@ -1142,7 +1206,14 @@ class DashboardWindow(QMainWindow):
                 self._threats_layout.addWidget(card)
 
         if not has_data:
-            lbl = QLabel("No threat data available. This may be normal if ZInsights tools returned empty results.")
+            threat_keys = ("incidents", "threat_classes", "shadow_it", "atp_urls",
+                           "zeasm_findings", "lookalike_domains")
+            message = (
+                "Threat data is incomplete because one or more MCP requests failed. Retry the refresh."
+                if any(d.get(key) is None for key in threat_keys)
+                else "No threat data available. This may be normal if ZInsights tools returned empty results."
+            )
+            lbl = QLabel(message)
             lbl.setObjectName("subtitle")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setWordWrap(True)
@@ -1173,7 +1244,7 @@ class DashboardWindow(QMainWindow):
 
         # 2. Segments without server groups (no backend)
         segments = self._safe_list(d.get("segments"))
-        for s in segments:
+        for s in segments if d.get("segments") is not None else []:
             if not isinstance(s, dict) or not s.get("enabled"):
                 continue
             sgs = s.get("serverGroups", [])
@@ -1188,7 +1259,7 @@ class DashboardWindow(QMainWindow):
         # 3. Firewall rules without DLP
         fw_rules = self._safe_list(d.get("firewall_rules"))
         dlp_rules = self._safe_list(d.get("dlp_rules"))
-        if fw_rules and not dlp_rules:
+        if d.get("firewall_rules") is not None and d.get("dlp_rules") is not None and fw_rules and not dlp_rules:
             findings.append(Finding(
                 severity="medium",
                 title="Firewall rules exist but no DLP rules configured",
@@ -1198,7 +1269,7 @@ class DashboardWindow(QMainWindow):
 
         # 4. No SSL inspection
         ssl_rules = self._safe_list(d.get("ssl_rules"))
-        if not ssl_rules:
+        if d.get("ssl_rules") is not None and not ssl_rules:
             findings.append(Finding(
                 severity="high",
                 title="No SSL inspection rules configured",
@@ -1208,7 +1279,7 @@ class DashboardWindow(QMainWindow):
 
         # 5. Auth exempt URLs
         auth_exempt = self._safe_list(d.get("auth_exempt"))
-        if auth_exempt:
+        if d.get("auth_exempt") is not None and auth_exempt:
             findings.append(Finding(
                 severity="medium",
                 title=f"{len(auth_exempt)} authentication-exempt URLs configured",
@@ -1226,7 +1297,7 @@ class DashboardWindow(QMainWindow):
 
         # 6. ATP malicious URLs found
         atp = self._safe_list(d.get("atp_urls"))
-        if atp:
+        if d.get("atp_urls") is not None and atp:
             findings.append(Finding(
                 severity="high",
                 title=f"{len(atp)} malicious URLs detected by ATP",
@@ -1236,7 +1307,7 @@ class DashboardWindow(QMainWindow):
 
         # 7. ZEASM findings
         zeasm = self._safe_list(d.get("zeasm_findings"))
-        for f in zeasm[:20]:
+        for f in zeasm[:20] if d.get("zeasm_findings") is not None else []:
             if not isinstance(f, dict):
                 continue
             sev = str(f.get("severity", f.get("risk", "medium"))).lower()
@@ -1251,7 +1322,7 @@ class DashboardWindow(QMainWindow):
 
         # 8. Lookalike domains
         lookalikes = self._safe_list(d.get("lookalike_domains"))
-        if lookalikes:
+        if d.get("lookalike_domains") is not None and lookalikes:
             findings.append(Finding(
                 severity="high",
                 title=f"{len(lookalikes)} lookalike domains detected",
@@ -1269,7 +1340,7 @@ class DashboardWindow(QMainWindow):
 
         # 9. Shadow IT apps
         shadow = self._safe_list(d.get("shadow_it"))
-        if shadow:
+        if d.get("shadow_it") is not None and shadow:
             high_risk = [a for a in shadow if isinstance(a, dict) and
                          (a.get("riskScore", 0) or 0) >= 7]
             if high_risk:
@@ -1283,7 +1354,7 @@ class DashboardWindow(QMainWindow):
         # 10. Segment groups without policies
         seg_groups = self._safe_list(d.get("segment_groups"))
         policies = self._safe_list(d.get("access_policies"))
-        if seg_groups and not policies:
+        if d.get("segment_groups") is not None and d.get("access_policies") is not None and seg_groups and not policies:
             findings.append(Finding(
                 severity="high",
                 title="Segment groups exist but no access policies found",
@@ -1291,7 +1362,7 @@ class DashboardWindow(QMainWindow):
                 source="Policy Audit",
             ))
 
-        self._findings_panel.set_findings(findings)
+        self._findings_panel.set_findings(findings, incomplete=bool(self._data_errors))
         self._log(f"Anomaly detection complete: {len(findings)} findings")
 
     def _compute_smart_score(self):
@@ -1300,6 +1371,16 @@ class DashboardWindow(QMainWindow):
         score = 0
         breakdown = []
         recommendations = []
+
+        score_inputs = ("ssl_rules", "dlp_rules", "url_rules", "firewall_rules",
+                        "access_policies", "connector_groups", "atp_urls", "segments")
+        unavailable = [key for key in score_inputs if d.get(key) is None]
+        if unavailable:
+            self._gauge.set_available(False)
+            self._score_breakdown.setText("Score unavailable: data could not be loaded for " + ", ".join(unavailable))
+            self._recommendations_label.setText("Some MCP requests failed. Retry the refresh before relying on a security score.")
+            return
+        self._gauge.set_available(True)
 
         # SSL Inspection (+10)
         ssl = self._safe_list(d.get("ssl_rules"))
@@ -1416,8 +1497,16 @@ class DashboardWindow(QMainWindow):
             return None
         try:
             self._log(f"Calling {tool_name}...")
-            return await self._mcp.call_tool(tool_name, args)
+            result = await self._mcp.call_tool(tool_name, args)
+            if isinstance(result, dict) and "_rpc_error" in result:
+                raise RuntimeError(f"MCP RPC error: {result['_rpc_error']}")
+            if isinstance(result, str):
+                self._data_errors[tool_name] = result[:500] or "Unstructured tool response"
+                self._log(f"Invalid response from {tool_name}.")
+                return None
+            return result
         except Exception as e:
+            self._data_errors[tool_name] = str(e)[:500]
             self._log(f"Error calling {tool_name}: {e}")
             return None
 

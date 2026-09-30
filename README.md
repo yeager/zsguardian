@@ -5,7 +5,7 @@ A modern macOS menubar + dashboard application that connects to the [Zscaler MCP
 ## Features
 
 - **Security Posture Score** — Gamified radial gauge (0–100) computed from your live environment
-- **MCP Tools Explorer** — Browse and search 110+ read-only Zscaler tools
+- **MCP Tools Explorer** — Browse and search available Zscaler tools (read-only by default)
 - **Policy Flow Map** — Visual mapping of access policies, app segments, and URL categories
 - **Connector Health** — Real-time connector status monitoring
 - **Application Segments** — View and inspect all ZPA application segments
@@ -25,7 +25,7 @@ A modern macOS menubar + dashboard application that connects to the [Zscaler MCP
 ```bash
 # Clone
 git clone <this-repo>
-cd zscaler-guardian
+cd zsguardian
 
 # Install dependencies
 pip install -r requirements.txt
@@ -68,9 +68,11 @@ src/
 1. **Credentials** are loaded from macOS Keychain at runtime
 2. **MCP Client** spawns `uvx zscaler-mcp` as a subprocess with credentials as env vars
 3. **JSON-RPC** communication over stdio (MCP protocol 2024-11-05)
-4. **Tool discovery** via `tools/list` — typically 110+ read-only tools
+4. **Tool discovery** via `tools/list` — server version is pinned to `0.15.4`; write tools are disabled by default
 5. **Dashboard** calls tools like `list_access_policies`, `list_connectors`, etc.
 6. **Security Score** is computed from the number and health of policies, connectors, segments, DLP engines, and IdPs
+
+The Settings dialog can explicitly enable write tools with a required comma-separated allowlist. This setting is passed to the MCP server using `ZSCALER_MCP_WRITE_ENABLED` and `ZSCALER_MCP_WRITE_TOOLS`. Only enable tools you intend to authorize.
 
 ## License
 

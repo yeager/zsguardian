@@ -28,6 +28,7 @@ class SecurityScoreGauge(QWidget):
         super().__init__(parent)
         self._score = 0.0
         self._display_score = 0.0
+        self._available = True
         self._animation = QPropertyAnimation(self, b"display_score")
         self._animation.setDuration(1200)
         self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -49,11 +50,16 @@ class SecurityScoreGauge(QWidget):
     display_score = Property(float, _get_display_score, _set_display_score)
 
     def set_score(self, score: float):
+        self._available = True
         self._score = max(0.0, min(100.0, score))
         self._animation.stop()
         self._animation.setStartValue(self._display_score)
         self._animation.setEndValue(self._score)
         self._animation.start()
+
+    def set_available(self, available: bool):
+        self._available = available
+        self.update()
 
     def _pulse_tick(self):
         self._pulse_phase += 0.05
@@ -62,6 +68,8 @@ class SecurityScoreGauge(QWidget):
         self.update()
 
     def _score_color(self) -> QColor:
+        if not self._available:
+            return QColor("#8B949E")
         s = self._display_score
         if s >= 80:
             return QColor("#00E676")
@@ -133,7 +141,8 @@ class SecurityScoreGauge(QWidget):
         arc_pen = QPen(grad, arc_width)
         arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(arc_pen)
-        painter.drawArc(rect, 225 * 16, int(sweep * 16))
+        if self._available:
+            painter.drawArc(rect, 225 * 16, int(sweep * 16))
 
         # Center text — score
         painter.setPen(QColor("#E6EDF3"))
@@ -141,7 +150,7 @@ class SecurityScoreGauge(QWidget):
         painter.setFont(font)
         painter.drawText(QRectF(0, cy - side * 0.18, w, side * 0.28),
                          Qt.AlignmentFlag.AlignCenter,
-                         f"{int(self._display_score)}")
+                         f"{int(self._display_score)}" if self._available else "N/A")
 
         # Grade label
         grade_font = QFont(".AppleSystemUIFont", int(side * 0.07), QFont.Weight.DemiBold)
@@ -149,7 +158,7 @@ class SecurityScoreGauge(QWidget):
         painter.setPen(self._score_color())
         painter.drawText(QRectF(0, cy + side * 0.06, w, side * 0.14),
                          Qt.AlignmentFlag.AlignCenter,
-                         self._grade())
+                         self._grade() if self._available else "Incomplete data")
 
         # Label below
         label_font = QFont(".AppleSystemUIFont", int(side * 0.045))
